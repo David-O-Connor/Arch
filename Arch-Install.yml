@@ -1,4 +1,3 @@
----
 - name: Install Arch Linux dynamically (with disks and menu)
   hosts: localhost
   become: true
@@ -43,6 +42,10 @@
       prompt: "Enter number (1=GNOME, 2=KDE, 3=XFCE, 4=Hyperland)"
       private: no
 
+    - name: "reboot_now"
+      prompt: "Do you want to reboot now after install? (yes/no)"
+      private: no
+
   tasks:
 
     - name: Set desktop environment based on choice
@@ -78,9 +81,8 @@
     - name: Partition the disk
       shell: |
         sgdisk --zap-all /dev/{{ target_disk }}
-        sgdisk -n 1:0:512M -t 1:ef00 /dev/{{ target_disk }}
+        sgdisk -n 1:0:+512M -t 1:ef00 /dev/{{ target_disk }}
         sgdisk -n 2:0:0 -t 2:8300 /dev/{{ target_disk }}
-      ignore_errors: yes
 
     - name: Format EFI partition
       filesystem:
@@ -144,11 +146,10 @@
           127.0.1.1   archlinux.localdomain archlinux
 
     - name: Enable locale
-      blockinfile:
+      lineinfile:
         path: /mnt/etc/locale.gen
-        block: |
-          en_US.UTF-8 UTF-8
-      marker: ""
+        regexp: '^#en_US.UTF-8 UTF-8'
+        line: 'en_US.UTF-8 UTF-8'
 
     - name: Generate locale
       shell: |
@@ -159,6 +160,7 @@
         src: /usr/share/zoneinfo/America/New_York
         dest: /mnt/etc/localtime
         state: link
+        force: yes
 
     - name: Set hardware clock
       shell: |
@@ -197,13 +199,7 @@
         arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
         arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
 
-    - name: Prompt for reboot
-      vars_prompt:
-        - name: "reboot_now"
-          prompt: "Do you want to reboot now? (yes/no)"
-          private: no
-
-    - name: Reboot if user chooses to
-      reboot:
-        reboot_timeout: 600
-      when: reboot_now == 'yes' || 'y'
+    - name: Reboot system if requested
+      shell: |
+        arch-chroot /mnt systemctl reboot
+      when: reboot_now == 'yes' or reboot_now == 'y'
