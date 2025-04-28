@@ -84,11 +84,10 @@
         sgdisk -n 1:0:+512M -t 1:ef00 /dev/{{ target_disk }}
         sgdisk -n 2:0:0 -t 2:8300 /dev/{{ target_disk }}
 
-    - name: Format EFI partition
-      filesystem:
-        fstype: vfat
-        dev: "/dev/{{ target_disk }}1"
-        force: true
+    - name: Unmount EFI partition if mounted
+      shell: |
+        umount /dev/{{ target_disk }}1 || true
+      ignore_errors: true
 
     - name: Format root partition
       filesystem:
