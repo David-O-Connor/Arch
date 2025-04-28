@@ -78,6 +78,18 @@
         state: present
         update_cache: yes
 
+    - name: Check if swap is active on /dev/{{ target_disk }}2
+      shell: |
+        swapon --show | grep /dev/{{ target_disk }}2 || true
+      register: swap_status
+      ignore_errors: true
+
+    - name: Turn off swap on /dev/{{ target_disk }}2 if active
+      shell: |
+        swapoff /dev/{{ target_disk }}2
+      when: swap_status.stdout != ''
+      ignore_errors: true
+
     - name: Partition the disk
       shell: |
         sgdisk --zap-all /dev/{{ target_disk }}
@@ -89,10 +101,18 @@
         umount /dev/{{ target_disk }}1 || true
       ignore_errors: true
 
-    - name: Format root partition
+    - name: Format EFI partition
       filesystem:
-        fstype: ext4
-        dev: "/dev/{{ target_disk }}2"
+        fstype: vfat
+        dev: "/dev/{{ target_disk }}1"
+        force: true
+
+    - name: Format root partition (if not already formatted)
+      shell: |
+        if ! blkid /dev/{{ target_disk }}2 | grep -q "ext4"; then
+          mkfs.ext4 /dev/{{ target_disk }}2
+        fi
+      ignore_errors: true
 
     - name: Mount root partition
       mount:
