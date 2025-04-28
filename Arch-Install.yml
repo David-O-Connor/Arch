@@ -88,6 +88,7 @@
       filesystem:
         fstype: vfat
         dev: "/dev/{{ target_disk }}1"
+        force: true
 
     - name: Format root partition
       filesystem:
