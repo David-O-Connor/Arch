@@ -1,0 +1,209 @@
+---
+- name: Install Arch Linux dynamically (with disks and menu)
+  hosts: localhost
+  become: true
+
+  pre_tasks:
+    - name: List available disks
+      shell: |
+        lsblk -d -o NAME,SIZE,MODEL
+      register: disk_list
+
+    - name: Show available disks
+      debug:
+        msg: "{{ disk_list.stdout_lines }}"
+
+    - name: Show desktop environment options
+      debug:
+        msg: |
+          Choose a Desktop Environment:
+          1 - GNOME
+          2 - KDE Plasma
+          3 - XFCE
+          4 - Hyperland
+
+  vars_prompt:
+    - name: "target_disk"
+      prompt: "Enter the target disk name (e.g., sda, nvme0n1) from the list above"
+      private: no
+
+    - name: "username"
+      prompt: "Enter username for the new user"
+      private: no
+
+    - name: "user_password"
+      prompt: "Enter password for new user"
+      private: yes
+
+    - name: "root_password"
+      prompt: "Enter root password"
+      private: yes
+
+    - name: "desktop_environment_choice"
+      prompt: "Enter number (1=GNOME, 2=KDE, 3=XFCE, 4=Hyperland)"
+      private: no
+
+  tasks:
+
+    - name: Set desktop environment based on choice
+      set_fact:
+        desktop_environment: >-
+          {% if desktop_environment_choice == '1' %}
+            gnome
+          {% elif desktop_environment_choice == '2' %}
+            kde
+          {% elif desktop_environment_choice == '3' %}
+            xfce
+          {% elif desktop_environment_choice == '4' %}
+            hyperland
+          {% else %}
+            gnome
+          {% endif %}
+
+    - name: Confirm selected Desktop Environment
+      debug:
+        msg: "Selected DE: {{ desktop_environment }}"
+
+    - name: Install required packages
+      pacman:
+        name:
+          - arch-install-scripts
+          - e2fsprogs
+          - grub
+          - sudo
+          - networkmanager
+        state: present
+        update_cache: yes
+
+    - name: Partition the disk
+      shell: |
+        sgdisk --zap-all /dev/{{ target_disk }}
+        sgdisk -n 1:0:512M -t 1:ef00 /dev/{{ target_disk }}
+        sgdisk -n 2:0:0 -t 2:8300 /dev/{{ target_disk }}
+      ignore_errors: yes
+
+    - name: Format EFI partition
+      filesystem:
+        fstype: vfat
+        dev: "/dev/{{ target_disk }}1"
+
+    - name: Format root partition
+      filesystem:
+        fstype: ext4
+        dev: "/dev/{{ target_disk }}2"
+
+    - name: Mount root partition
+      mount:
+        path: /mnt
+        src: "/dev/{{ target_disk }}2"
+        fstype: ext4
+        state: mounted
+
+    - name: Create EFI mount point
+      file:
+        path: /mnt/boot
+        state: directory
+
+    - name: Mount EFI partition
+      mount:
+        path: /mnt/boot
+        src: "/dev/{{ target_disk }}1"
+        fstype: vfat
+        state: mounted
+
+    - name: Install base system
+      shell: |
+        pacstrap /mnt base linux linux-firmware vim sudo networkmanager grub efibootmgr
+
+    - name: Install Desktop Environment packages
+      shell: |
+        if [ "{{ desktop_environment }}" == "gnome" ]; then
+          pacstrap /mnt gnome gnome-extra;
+        elif [ "{{ desktop_environment }}" == "kde" ]; then
+          pacstrap /mnt plasma kde-applications;
+        elif [ "{{ desktop_environment }}" == "xfce" ]; then
+          pacstrap /mnt xfce4 xfce4-goodies;
+        elif [ "{{ desktop_environment }}" == "hyperland" ]; then
+          pacstrap /mnt hyprland wayland xorg-server xorg-xinit lightdm lightdm-gtk-greeter;
+        fi
+
+    - name: Generate fstab
+      shell: genfstab -U /mnt >> /mnt/etc/fstab
+
+    - name: Set hostname
+      copy:
+        dest: /mnt/etc/hostname
+        content: "archlinux\n"
+
+    - name: Set hosts file
+      copy:
+        dest: /mnt/etc/hosts
+        content: |
+          127.0.0.1   localhost
+          ::1         localhost
+          127.0.1.1   archlinux.localdomain archlinux
+
+    - name: Enable locale
+      blockinfile:
+        path: /mnt/etc/locale.gen
+        block: |
+          en_US.UTF-8 UTF-8
+      marker: ""
+
+    - name: Generate locale
+      shell: |
+        arch-chroot /mnt locale-gen
+
+    - name: Set timezone
+      file:
+        src: /usr/share/zoneinfo/America/New_York
+        dest: /mnt/etc/localtime
+        state: link
+
+    - name: Set hardware clock
+      shell: |
+        arch-chroot /mnt hwclock --systohc
+
+    - name: Set root password
+      shell: |
+        echo "root:{{ root_password }}" | arch-chroot /mnt chpasswd
+
+    - name: Create user
+      shell: |
+        arch-chroot /mnt useradd -m -G wheel -s /bin/bash {{ username }}
+        echo "{{ username }}:{{ user_password }}" | arch-chroot /mnt chpasswd
+
+    - name: Allow wheel users to sudo
+      replace:
+        path: /mnt/etc/sudoers
+        regexp: '^# %wheel ALL=\(ALL:ALL\) ALL'
+        replace: '%wheel ALL=(ALL:ALL) ALL'
+
+    - name: Enable NetworkManager and display manager
+      shell: |
+        arch-chroot /mnt systemctl enable NetworkManager
+        if [ "{{ desktop_environment }}" == "gnome" ]; then
+          arch-chroot /mnt systemctl enable gdm;
+        elif [ "{{ desktop_environment }}" == "kde" ]; then
+          arch-chroot /mnt systemctl enable sddm;
+        elif [ "{{ desktop_environment }}" == "xfce" ]; then
+          arch-chroot /mnt systemctl enable lightdm;
+        elif [ "{{ desktop_environment }}" == "hyperland" ]; then
+          arch-chroot /mnt systemctl enable lightdm;
+        fi
+
+    - name: Install GRUB bootloader
+      shell: |
+        arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+        arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+    - name: Prompt for reboot
+      vars_prompt:
+        - name: "reboot_now"
+          prompt: "Do you want to reboot now? (yes/no)"
+          private: no
+
+    - name: Reboot if user chooses to
+      reboot:
+        reboot_timeout: 600
+      when: reboot_now == 'yes' || 'y'
